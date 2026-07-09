@@ -903,7 +903,7 @@ class ChatPane extends LitElement {
       disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
-      providerQuota: {
+      providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
       },
