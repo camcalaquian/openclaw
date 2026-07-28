@@ -10,7 +10,6 @@ import type {
 } from "../infra/node-pairing.js";
 import {
   normalizeDeclaredNodeCommands,
-  resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
 
@@ -99,6 +98,7 @@ function buildNodePairingRequestInput(params: {
   commands: string[];
   permissions?: Record<string, boolean>;
   remoteIp?: string;
+  silent?: boolean;
 }): NodePairingRequestInput {
   return {
     nodeId: params.nodeId,
@@ -111,6 +111,7 @@ function buildNodePairingRequestInput(params: {
     commands: params.commands,
     permissions: params.permissions,
     remoteIp: params.remoteIp,
+    ...(params.silent ? { silent: true } : {}),
   };
 }
 
@@ -120,6 +121,12 @@ export async function reconcileNodePairingOnConnect(params: {
   connectParams: ConnectParams;
   pairedNode: NodePairingPairedNode | null;
   reportedClientIp?: string;
+  /**
+   * Marks the first-surface capability request silent when device pairing was
+   * approved non-interactively; approval UIs may then auto-approve it (macOS
+   * SSH trust probe) instead of prompting. Upgrade requests stay interactive.
+   */
+  initialSurfaceSilent?: boolean;
   requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult | null>;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
@@ -148,6 +155,7 @@ export async function reconcileNodePairingOnConnect(params: {
         commands: declared,
         permissions: declaredPermissions,
         remoteIp: params.reportedClientIp,
+        silent: params.initialSurfaceSilent,
       }),
     );
     if (!pendingPairing) {
@@ -165,13 +173,12 @@ export async function reconcileNodePairingOnConnect(params: {
     };
   }
 
-  const runtimeAllowlist = resolveNodeCommandAllowlist(params.cfg, {
-    ...policyNode,
-    approvedCommands: params.pairedNode.commands,
-  });
+  // Approved commands reconcile against the pairing allowlist. Dangerous
+  // surfaces awaiting persistent enablement must not read as a pairing upgrade
+  // on every reconnect; invoke-time policy still applies the runtime allowlist.
   const approvedCommands = resolveApprovedReconnectCommands({
     pairedCommands: params.pairedNode.commands,
-    allowlist: runtimeAllowlist,
+    allowlist: pairingAllowlist,
   });
   const approvedCaps = normalizeNodeApprovalSurfaceList(params.pairedNode.caps);
   const approvedPermissions = normalizePermissionMap(params.pairedNode.permissions);

@@ -1,33 +1,54 @@
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
+import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import type { BoardFace } from "./lib/board/settings.ts";
+export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
-  overview: { path: "/overview" },
+  dashboard: { path: "/dashboard" },
+  dashboards: { path: "/dashboards" },
+  custodian: { path: "/custodian" },
+  "new-session": { path: "/new" },
   activity: { path: "/activity" },
-  agents: { path: "/agents" },
+  apps: { path: "/apps" },
+  agents: { path: "/settings/agents", aliases: ["/agents"] },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
+  connection: { path: "/settings/connection" },
   config: { path: "/settings/general", aliases: ["/config"] },
+  profile: { path: "/settings/profile", aliases: ["/profile"] },
   communications: { path: "/settings/communications", aliases: ["/communications"] },
   appearance: { path: "/settings/appearance", aliases: ["/appearance"] },
+  lobsterdex: { path: "/settings/lobsterdex", aliases: ["/lobsterdex"] },
+  notifications: { path: "/settings/notifications" },
+  security: { path: "/settings/security" },
+  advanced: { path: "/settings/advanced" },
+  approvals: { path: "/settings/approvals" },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
+  memory: { path: "/settings/memory" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
+  labs: { path: "/settings/labs" },
+  about: { path: "/settings/about" },
   "ai-agents": { path: "/settings/ai-agents", aliases: ["/ai-agents"] },
+  "model-setup": { path: "/settings/model-setup", aliases: ["/model-setup"] },
+  "model-providers": { path: "/settings/model-providers", aliases: ["/model-providers"] },
+  // Memory import, sessions, and worktrees are workspace destinations; the
+  // /settings/* aliases keep pre-restructure bookmarks and deep links working.
+  "memory-import": { path: "/memory-import", aliases: ["/settings/memory-import"] },
   workboard: { path: "/workboard" },
-  worktrees: { path: "/settings/worktrees", aliases: ["/worktrees"] },
-  instances: { path: "/instances" },
-  sessions: { path: "/sessions" },
+  worktrees: { path: "/worktrees", aliases: ["/settings/worktrees"] },
+  sessions: { path: "/sessions", aliases: ["/settings/sessions"] },
   usage: { path: "/usage" },
   debug: { path: "/debug" },
   logs: { path: "/logs" },
   "skill-workshop": { path: "/skills/workshop" },
   skills: { path: "/skills" },
+  plugins: { path: "/settings/plugins" },
   cron: { path: "/cron" },
   tasks: { path: "/tasks" },
-  nodes: { path: "/nodes" },
+  nodes: { path: "/settings/devices", aliases: ["/nodes"] },
   plugin: { path: "/plugin" },
-  dreams: { path: "/dreaming", aliases: ["/dreams"] },
 } as const;
 
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;
@@ -41,7 +62,7 @@ export function normalizeBasePath(basePath: string): string {
   return normalizeRouteBasePath(basePath);
 }
 
-export function normalizePath(path: string): string {
+function normalizePath(path: string): string {
   return normalizeRoutePath(path);
 }
 
@@ -49,6 +70,55 @@ export function pathForRoute(routeId: RouteId, basePath = ""): string {
   const normalizedBasePath = normalizeBasePath(basePath);
   const path = APP_ROUTE_DEFINITIONS[routeId].path;
   return normalizedBasePath ? `${normalizedBasePath}${path}` : path;
+}
+
+export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
+  if (!isValidWorkboardBoardId(boardId)) {
+    throw new Error("Invalid Workboard board id.");
+  }
+  const encodedBoardId = encodeURIComponent(boardId).replaceAll(".", "%2E");
+  return `${pathForRoute("workboard", basePath)}/${encodedBoardId}`;
+}
+
+export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
+  return routeId === "chat" || routeId === "dashboard";
+}
+
+export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): BoardFace | null {
+  const normalizedPath = normalizePath(pathname);
+  const normalizedBasePath = normalizeBasePath(basePath);
+  if (
+    normalizedBasePath &&
+    normalizedPath !== normalizedBasePath &&
+    !normalizedPath.startsWith(`${normalizedBasePath}/`)
+  ) {
+    return null;
+  }
+  const routePath = normalizedPath.slice(normalizedBasePath.length);
+  return routePath.startsWith("/chat/")
+    ? "chat"
+    : routePath.startsWith("/dashboard/")
+      ? "dashboard"
+      : null;
+}
+
+export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
+  const normalizedPath = normalizePath(pathname);
+  const workboardPath = pathForRoute("workboard", basePath);
+  const prefix = `${workboardPath}/`;
+  if (!normalizedPath.startsWith(prefix)) {
+    return null;
+  }
+  const encodedBoardId = normalizedPath.slice(prefix.length);
+  if (!encodedBoardId || encodedBoardId.includes("/")) {
+    return null;
+  }
+  try {
+    const boardId = decodeURIComponent(encodedBoardId);
+    return isValidWorkboardBoardId(boardId) ? boardId : null;
+  } catch {
+    return null;
+  }
 }
 
 export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null {
@@ -64,6 +134,13 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   const routePath = normalizedBasePath
     ? normalizedPath.slice(normalizedBasePath.length) || "/"
     : normalizedPath;
+  if (workboardBoardIdFromPath(normalizedPath, normalizedBasePath)) {
+    return "workboard";
+  }
+  const sessionNamespace = sessionRouteNamespaceFromPath(normalizedPath, normalizedBasePath);
+  if (sessionNamespace) {
+    return sessionNamespace;
+  }
   for (const routeId of APP_ROUTE_IDS) {
     const definition = APP_ROUTE_DEFINITIONS[routeId];
     const paths: readonly string[] =
@@ -96,12 +173,20 @@ export function inferBasePathFromPathname(pathname: string): string {
   for (let index = 0; index < segments.length; index += 1) {
     const candidate = `/${segments.slice(index).join("/")}`;
     const routePath = routePaths.find((path) => normalizePath(path) === candidate);
-    if (!routePath) {
+    const dynamicWorkboardRoute = workboardBoardIdFromPath(candidate) !== null;
+    const dynamicSessionRoute = sessionRouteNamespaceFromPath(candidate) !== null;
+    if (!routePath && !dynamicWorkboardRoute && !dynamicSessionRoute) {
       continue;
     }
     const previousSegment = segments[index - 1];
-    const firstRouteSegment = routePath.split("/").find(Boolean);
-    if (index > 0 && previousSegment === firstRouteSegment && candidate === routePath) {
+    const firstRouteSegment = (routePath ?? APP_ROUTE_DEFINITIONS.workboard.path)
+      .split("/")
+      .find(Boolean);
+    if (
+      index > 0 &&
+      previousSegment === firstRouteSegment &&
+      (candidate === routePath || dynamicWorkboardRoute || dynamicSessionRoute)
+    ) {
       return "";
     }
     return index ? `/${segments.slice(0, index).join("/")}` : "";
